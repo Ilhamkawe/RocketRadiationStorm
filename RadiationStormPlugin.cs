@@ -465,7 +465,7 @@ namespace RocketRadiationStorm
 
             foreach (var steamPlayer in Provider.clients)
             {
-                EffectManager.askEffectClearByID(steamPlayer.transportConnection, Configuration.Instance.RadiationEffectId);
+                EffectManager.askEffectClearByID(Configuration.Instance.RadiationEffectId, steamPlayer.transportConnection);
             }
 
             _effectRecipients.Clear();
