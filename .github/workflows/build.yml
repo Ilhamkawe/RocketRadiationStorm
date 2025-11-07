@@ -18,8 +18,7 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build plugin
-        working-directory: RocketRadiationStorm
-        run: msbuild RocketRadiationStorm.csproj /p:Configuration=Release
+        run: msbuild RocketRadiationStorm\RocketRadiationStorm.csproj /p:Configuration=Release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
