@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Timers;
 using Rocket.API.Collections;
 using Rocket.Core.Plugins;
@@ -7,6 +8,7 @@ using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
+using Steamworks;
 using UnityEngine;
 using RocketLogger = Rocket.Core.Logging.Logger;
 
@@ -18,11 +20,12 @@ namespace RocketRadiationStorm
         private Timer _autoStormTimer;
         private Timer _stormDurationTimer;
         private Timer _damageDelayTimer;
-        private readonly HashSet<Steamworks.CSteamID> _effectRecipients = new HashSet<Steamworks.CSteamID>();
+        private readonly HashSet<CSteamID> _effectRecipients = new HashSet<CSteamID>();
         private bool _stormActive;
         private bool _damageActive;
         private DateTime? _nextStormTimeUtc;
         private readonly System.Random _random = new System.Random();
+        private MethodInfo _weatherCommandMethod;
 
         public static RadiationStormPlugin Instance { get; private set; }
 
@@ -287,7 +290,7 @@ namespace RocketRadiationStorm
 
             try
             {
-                CommandWindow.inputtedCommand($"weather add {Configuration.Instance.WeatherGuid}");
+                ExecuteWeatherCommand($"weather add {Configuration.Instance.WeatherGuid}");
             }
             catch (Exception ex)
             {
@@ -304,7 +307,7 @@ namespace RocketRadiationStorm
 
             try
             {
-                CommandWindow.inputtedCommand($"weather remove {Configuration.Instance.WeatherGuid}");
+                ExecuteWeatherCommand($"weather remove {Configuration.Instance.WeatherGuid}");
             }
             catch (Exception ex)
             {
@@ -446,7 +449,7 @@ namespace RocketRadiationStorm
             EffectManager.sendUIEffect(
                 Configuration.Instance.RadiationEffectId,
                 Configuration.Instance.RadiationEffectKey,
-                steamId,
+                steamPlayer.transportConnection,
                 true);
 
             _effectRecipients.Add(steamId);
@@ -462,10 +465,41 @@ namespace RocketRadiationStorm
 
             foreach (var steamPlayer in Provider.clients)
             {
-                EffectManager.askEffectClearByID(steamPlayer.playerID.steamID, Configuration.Instance.RadiationEffectId);
+                EffectManager.askEffectClearByID(steamPlayer.transportConnection, Configuration.Instance.RadiationEffectId);
             }
 
             _effectRecipients.Clear();
+        }
+
+        private void ExecuteWeatherCommand(string command)
+        {
+            try
+            {
+                _weatherCommandMethod ??= typeof(CommandWindow).GetMethod(
+                    "executeCommand",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new[] { typeof(string) },
+                    null)
+                    ?? typeof(CommandWindow).GetMethod(
+                        "inputted",
+                        BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        new[] { typeof(string) },
+                        null);
+
+                if (_weatherCommandMethod == null)
+                {
+                    RocketLogger.LogWarning("[RadiationStorm] Unable to locate weather command dispatcher.");
+                    return;
+                }
+
+                _weatherCommandMethod.Invoke(null, new object[] { command });
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Weather command failed: {ex.Message}");
+            }
         }
     }
 }
