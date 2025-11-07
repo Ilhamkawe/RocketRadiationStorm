@@ -7,7 +7,6 @@ using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
-using Steamworks;
 using UnityEngine;
 using RocketLogger = Rocket.Core.Logging.Logger;
 
@@ -19,7 +18,7 @@ namespace RocketRadiationStorm
         private Timer _autoStormTimer;
         private Timer _stormDurationTimer;
         private Timer _damageDelayTimer;
-        private readonly HashSet<CSteamID> _effectRecipients = new HashSet<CSteamID>();
+        private readonly HashSet<Steamworks.CSteamID> _effectRecipients = new HashSet<Steamworks.CSteamID>();
         private bool _stormActive;
         private bool _damageActive;
         private DateTime? _nextStormTimeUtc;
