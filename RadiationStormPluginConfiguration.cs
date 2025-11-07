@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Rocket.API;
 
 namespace RocketRadiationStorm
@@ -13,7 +14,10 @@ namespace RocketRadiationStorm
         public double AutoStormMaxIntervalMinutes { get; set; }
         public double StormDurationSeconds { get; set; }
         public bool UseWeather { get; set; }
+        
+        [DefaultValue("00000000000000000000000000000000")]
         public string WeatherGuid { get; set; }
+        
         public double WeatherDamageDelaySeconds { get; set; }
         public bool UseRadiationEffect { get; set; }
         public ushort RadiationEffectId { get; set; }
@@ -30,7 +34,7 @@ namespace RocketRadiationStorm
             AutoStormMaxIntervalMinutes = 30;
             StormDurationSeconds = 180;
             UseWeather = false;
-            WeatherGuid = string.Empty;
+            WeatherGuid = "00000000000000000000000000000000";
             WeatherDamageDelaySeconds = 5;
             UseRadiationEffect = false;
             RadiationEffectId = 0;

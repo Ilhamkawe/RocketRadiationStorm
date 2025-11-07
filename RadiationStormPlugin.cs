@@ -477,6 +477,14 @@ namespace RocketRadiationStorm
         {
             try
             {
+                // Try direct Commander execute first
+                if (Rocket.Core.R.Commands != null)
+                {
+                    Rocket.Core.R.Commands.Execute(new Rocket.API.ConsolePlayer(), command);
+                    return;
+                }
+
+                // Fallback to reflection
                 _weatherCommandMethod ??= typeof(CommandWindow).GetMethod(
                     "executeCommand",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
