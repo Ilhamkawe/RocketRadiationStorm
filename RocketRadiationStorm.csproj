@@ -26,10 +26,6 @@
       <HintPath>RocketModFix.Unturned.Redist.Server.3.25.9.2\lib\net48\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Assembly-CSharp-firstpass">
-      <HintPath>RocketModFix.Unturned.Redist.Server.3.25.9.2\lib\net48\Assembly-CSharp-firstpass.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
     <Reference Include="com.rlabrecque.steamworks.net">
       <HintPath>RocketModFix.Unturned.Redist.Server.3.25.9.2\lib\net48\com.rlabrecque.steamworks.net.dll</HintPath>
       <Private>false</Private>
