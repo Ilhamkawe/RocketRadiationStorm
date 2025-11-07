@@ -6,6 +6,7 @@
     <AssemblyName>RocketRadiationStorm</AssemblyName>
     <RootNamespace>RocketRadiationStorm</RootNamespace>
     <Platforms>x86</Platforms>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 
   <ItemGroup>
