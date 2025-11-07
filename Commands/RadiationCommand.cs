@@ -43,8 +43,20 @@ namespace RocketRadiationStorm.Commands
                         SendMessage(caller, RadiationStormPlugin.Instance.Translate("storm_stop"));
                         break;
                     case "status":
-                        var state = RadiationStormPlugin.Instance.StormActive ? "active" : "inactive";
-                        SendMessage(caller, RadiationStormPlugin.Instance.Translate("storm_status", state));
+                        var plugin = RadiationStormPlugin.Instance;
+                        var state = plugin.StormActive ? "active" : "inactive";
+                        var message = plugin.Translate("storm_status", state);
+
+                        if (!plugin.StormActive && plugin.AutoStormEnabled && plugin.NextStormTimeUtc.HasValue)
+                        {
+                            var remaining = plugin.NextStormTimeUtc.Value - DateTime.UtcNow;
+                            if (remaining > TimeSpan.Zero)
+                            {
+                                message += " " + plugin.Translate("storm_next", FormatDuration(remaining));
+                            }
+                        }
+
+                        SendMessage(caller, message);
                         break;
                     default:
                         SendMessage(caller, Syntax);
@@ -60,6 +72,16 @@ namespace RocketRadiationStorm.Commands
         private static void SendMessage(IRocketPlayer caller, string message)
         {
             UnturnedChat.Say(caller, message, Color.green);
+        }
+
+        private static string FormatDuration(TimeSpan span)
+        {
+            if (span.TotalHours >= 1)
+            {
+                return string.Format("{0:D2}:{1:D2}:{2:D2}", (int)span.TotalHours, span.Minutes, span.Seconds);
+            }
+
+            return string.Format("{0:D2}:{1:D2}", span.Minutes, span.Seconds);
         }
     }
 }

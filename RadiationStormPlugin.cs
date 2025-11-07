@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Timers;
 using Rocket.API.Collections;
 using Rocket.Core.Plugins;
@@ -6,6 +7,7 @@ using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
+using Steamworks;
 using UnityEngine;
 using RocketLogger = Rocket.Core.Logging.Logger;
 
@@ -14,7 +16,14 @@ namespace RocketRadiationStorm
     public class RadiationStormPlugin : RocketPlugin<RadiationStormPluginConfiguration>
     {
         private Timer _tickTimer;
+        private Timer _autoStormTimer;
+        private Timer _stormDurationTimer;
+        private Timer _damageDelayTimer;
+        private readonly HashSet<ulong> _effectRecipients = new HashSet<ulong>();
         private bool _stormActive;
+        private bool _damageActive;
+        private DateTime? _nextStormTimeUtc;
+        private readonly Random _random = new Random();
 
         public static RadiationStormPlugin Instance { get; private set; }
 
@@ -22,15 +31,21 @@ namespace RocketRadiationStorm
         {
             Instance = this;
             _stormActive = false;
+            _damageActive = false;
 
-            InitializeTimer();
+            InitializeTickTimer();
+            InitializeAutoStormScheduler();
 
             RocketLogger.Log("[RadiationStorm] Plugin loaded.");
         }
 
         protected override void Unload()
         {
-            StopTimer();
+            StopTickTimer();
+            StopAutoStormTimer();
+            StopStormDurationTimer();
+            StopDamageDelayTimer();
+            ClearRadiationEffectAll();
             Instance = null;
             RocketLogger.Log("[RadiationStorm] Plugin unloaded.");
         }
@@ -41,12 +56,13 @@ namespace RocketRadiationStorm
             { "storm_stop", "Radiation storm has ended." },
             { "storm_already_active", "Radiation storm is already active." },
             { "storm_not_active", "No active radiation storm." },
-            { "storm_status", "Radiation storm is currently {0}." }
+            { "storm_status", "Radiation storm is currently {0}." },
+            { "storm_next", "Next radiation storm in {0}." }
         };
 
-        private void InitializeTimer()
+        private void InitializeTickTimer()
         {
-            StopTimer();
+            StopTickTimer();
 
             var interval = Math.Max(0.5, Configuration.Instance.TickIntervalSeconds);
             _tickTimer = new Timer(interval * 1000);
@@ -55,7 +71,7 @@ namespace RocketRadiationStorm
             _tickTimer.Start();
         }
 
-        private void StopTimer()
+        private void StopTickTimer()
         {
             if (_tickTimer == null)
             {
@@ -70,7 +86,7 @@ namespace RocketRadiationStorm
 
         private void OnTimerElapsed(object sender, ElapsedEventArgs e)
         {
-            if (!_stormActive)
+            if (!_stormActive || !_damageActive)
             {
                 return;
             }
@@ -93,6 +109,8 @@ namespace RocketRadiationStorm
                 {
                     continue;
                 }
+
+                EnsureRadiationEffect(player, steamPlayer);
 
                 var currentInfection = player.Infection;
 
@@ -127,6 +145,11 @@ namespace RocketRadiationStorm
             }
 
             _stormActive = true;
+            StopAutoStormTimerInternal();
+            _nextStormTimeUtc = null;
+            StartStormDurationCountdown();
+            ActivateWeather();
+            ScheduleDamageActivation();
             Broadcast("storm_start");
         }
 
@@ -138,10 +161,16 @@ namespace RocketRadiationStorm
             }
 
             _stormActive = false;
+            DeactivateDamagePhase();
+            StopStormDurationTimer();
+            DeactivateWeather();
             Broadcast("storm_stop");
+            ScheduleNextAutoStorm();
         }
 
         public bool StormActive => _stormActive;
+        public DateTime? NextStormTimeUtc => _nextStormTimeUtc;
+        public bool AutoStormEnabled => Configuration.Instance.AutoStormEnabled;
 
         private void Broadcast(string translationKey)
         {
@@ -151,6 +180,291 @@ namespace RocketRadiationStorm
             }
 
             UnturnedChat.Say(Translate(translationKey), Color.green);
+        }
+
+        private void InitializeAutoStormScheduler()
+        {
+            if (!Configuration.Instance.AutoStormEnabled)
+            {
+                StopAutoStormTimer();
+                return;
+            }
+
+            if (_autoStormTimer == null)
+            {
+                _autoStormTimer = new Timer
+                {
+                    AutoReset = false
+                };
+                _autoStormTimer.Elapsed += OnAutoStormTimerElapsed;
+            }
+
+            ScheduleNextAutoStorm();
+        }
+
+        private void ScheduleNextAutoStorm()
+        {
+            if (_autoStormTimer == null || !Configuration.Instance.AutoStormEnabled)
+            {
+                _nextStormTimeUtc = null;
+                return;
+            }
+
+            var min = Math.Max(0.1, Configuration.Instance.AutoStormMinIntervalMinutes);
+            var max = Math.Max(min, Configuration.Instance.AutoStormMaxIntervalMinutes);
+            var minutes = min.Equals(max) ? min : min + _random.NextDouble() * (max - min);
+            var interval = TimeSpan.FromMinutes(minutes);
+
+            _nextStormTimeUtc = DateTime.UtcNow.Add(interval);
+            _autoStormTimer.Interval = Math.Max(1000, interval.TotalMilliseconds);
+            _autoStormTimer.Start();
+        }
+
+        private void OnAutoStormTimerElapsed(object sender, ElapsedEventArgs e)
+        {
+            TaskDispatcher.QueueOnMainThread(() =>
+            {
+                if (_stormActive)
+                {
+                    ScheduleNextAutoStorm();
+                    return;
+                }
+
+                try
+                {
+                    StartStorm();
+                }
+                catch (Exception ex)
+                {
+                    RocketLogger.LogWarning($"[RadiationStorm] Failed to start auto storm: {ex.Message}");
+                }
+            });
+        }
+
+        private void StartStormDurationCountdown()
+        {
+            StopStormDurationTimer();
+
+            var durationSeconds = Math.Max(0, Configuration.Instance.StormDurationSeconds);
+            if (durationSeconds <= 0)
+            {
+                return;
+            }
+
+            _stormDurationTimer = new Timer(durationSeconds * 1000)
+            {
+                AutoReset = false
+            };
+            _stormDurationTimer.Elapsed += OnStormDurationElapsed;
+            _stormDurationTimer.Start();
+        }
+
+        private void OnStormDurationElapsed(object sender, ElapsedEventArgs e)
+        {
+            TaskDispatcher.QueueOnMainThread(() =>
+            {
+                if (!_stormActive)
+                {
+                    return;
+                }
+
+                try
+                {
+                    StopStorm();
+                }
+                catch (InvalidOperationException)
+                {
+                    // ignored
+                }
+            });
+        }
+
+        private void ActivateWeather()
+        {
+            if (!Configuration.Instance.UseWeather || string.IsNullOrEmpty(Configuration.Instance.WeatherGuid))
+            {
+                return;
+            }
+
+            try
+            {
+                Provider.serverExecuteCommand($"weather add {Configuration.Instance.WeatherGuid}");
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Unable to start weather: {ex.Message}");
+            }
+        }
+
+        private void DeactivateWeather()
+        {
+            if (!Configuration.Instance.UseWeather || string.IsNullOrEmpty(Configuration.Instance.WeatherGuid))
+            {
+                return;
+            }
+
+            try
+            {
+                Provider.serverExecuteCommand($"weather remove {Configuration.Instance.WeatherGuid}");
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Unable to stop weather: {ex.Message}");
+            }
+        }
+
+        private void StopAutoStormTimerInternal()
+        {
+            if (_autoStormTimer == null)
+            {
+                return;
+            }
+
+            _autoStormTimer.Stop();
+        }
+
+        private void StopAutoStormTimer()
+        {
+            if (_autoStormTimer == null)
+            {
+                return;
+            }
+
+            _autoStormTimer.Elapsed -= OnAutoStormTimerElapsed;
+            _autoStormTimer.Stop();
+            _autoStormTimer.Dispose();
+            _autoStormTimer = null;
+        }
+
+        private void StopStormDurationTimer()
+        {
+            if (_stormDurationTimer == null)
+            {
+                return;
+            }
+
+            _stormDurationTimer.Elapsed -= OnStormDurationElapsed;
+            _stormDurationTimer.Stop();
+            _stormDurationTimer.Dispose();
+            _stormDurationTimer = null;
+        }
+
+        private void ScheduleDamageActivation()
+        {
+            _damageActive = false;
+            StopDamageDelayTimer();
+
+            var delaySeconds = Math.Max(0, Configuration.Instance.WeatherDamageDelaySeconds);
+            if (delaySeconds <= 0)
+            {
+                ActivateDamagePhase();
+                return;
+            }
+
+            _damageDelayTimer = new Timer(delaySeconds * 1000)
+            {
+                AutoReset = false
+            };
+            _damageDelayTimer.Elapsed += OnDamageDelayElapsed;
+            _damageDelayTimer.Start();
+        }
+
+        private void OnDamageDelayElapsed(object sender, ElapsedEventArgs e)
+        {
+            TaskDispatcher.QueueOnMainThread(ActivateDamagePhase);
+        }
+
+        private void ActivateDamagePhase()
+        {
+            StopDamageDelayTimer();
+
+            if (_damageActive)
+            {
+                return;
+            }
+
+            _damageActive = true;
+
+            if (Configuration.Instance.UseRadiationEffect)
+            {
+                ApplyRadiationEffectAll();
+            }
+        }
+
+        private void DeactivateDamagePhase()
+        {
+            _damageActive = false;
+            StopDamageDelayTimer();
+            ClearRadiationEffectAll();
+        }
+
+        private void StopDamageDelayTimer()
+        {
+            if (_damageDelayTimer == null)
+            {
+                return;
+            }
+
+            _damageDelayTimer.Elapsed -= OnDamageDelayElapsed;
+            _damageDelayTimer.Stop();
+            _damageDelayTimer.Dispose();
+            _damageDelayTimer = null;
+        }
+
+        private void ApplyRadiationEffectAll()
+        {
+            if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
+            {
+                return;
+            }
+
+            foreach (var steamPlayer in Provider.clients)
+            {
+                var player = UnturnedPlayer.FromSteamPlayer(steamPlayer);
+                if (player == null || player.Dead)
+                {
+                    continue;
+                }
+
+                EnsureRadiationEffect(player, steamPlayer);
+            }
+        }
+
+        private void EnsureRadiationEffect(UnturnedPlayer player, SteamPlayer steamPlayer)
+        {
+            if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
+            {
+                return;
+            }
+
+            if (_effectRecipients.Contains(steamPlayer.playerID.steamID.m_SteamID))
+            {
+                return;
+            }
+
+            EffectManager.sendUIEffect(
+                Configuration.Instance.RadiationEffectId,
+                Configuration.Instance.RadiationEffectKey,
+                steamPlayer,
+                true);
+
+            _effectRecipients.Add(steamPlayer.playerID.steamID.m_SteamID);
+        }
+
+        private void ClearRadiationEffectAll()
+        {
+            if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
+            {
+                _effectRecipients.Clear();
+                return;
+            }
+
+            foreach (var steamPlayer in Provider.clients)
+            {
+                EffectManager.sendUIEffectClear(Configuration.Instance.RadiationEffectKey, steamPlayer);
+            }
+
+            _effectRecipients.Clear();
         }
     }
 }
