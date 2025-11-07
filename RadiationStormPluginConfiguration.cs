@@ -30,11 +30,18 @@ namespace RocketRadiationStorm
         public double SafezoneRadiatorDefaultRadius { get; set; }
         public double SafezoneRadiatorRefreshSeconds { get; set; }
         public bool SafezoneRadiatorRequiresPower { get; set; }
+        public bool UseDeadzone { get; set; }
+        public double DeadzoneRadius { get; set; }
+        public double DeadzoneSpacing { get; set; }
+        public double DeadzoneUnprotectedDamagePerSecond { get; set; }
+        public double DeadzoneProtectedDamagePerSecond { get; set; }
+        public double DeadzoneUnprotectedRadiationPerSecond { get; set; }
+        public double DeadzoneMaskFilterDamagePerSecond { get; set; }
 
         public void LoadDefaults()
         {
             TickIntervalSeconds = 2.0; // Check effect tiap 2 detik
-            InfectionDamagePerTick = 0; // 0 = damage dari effect, bukan manual
+            InfectionDamagePerTick = 5; // Damage per tick (setiap 2 detik = 2.5 damage/detik)
             BroadcastMessages = true;
             TargetUnturnedAdmins = false;
             AutoStormEnabled = true; // Auto storm aktif
@@ -54,6 +61,13 @@ namespace RocketRadiationStorm
             SafezoneRadiatorDefaultRadius = 8.0; // Radius asli sekitar 8 meter
             SafezoneRadiatorRefreshSeconds = 5.0;
             SafezoneRadiatorRequiresPower = true;
+            UseDeadzone = true; // Aktifkan deadzone dengan radius
+            DeadzoneRadius = 10000.0; // Radius deadzone (akan dihitung otomatis berdasarkan map size, atau gunakan nilai ini jika lebih besar)
+            DeadzoneSpacing = 0.0; // Tidak digunakan untuk single node (disimpan untuk kompatibilitas)
+            DeadzoneUnprotectedDamagePerSecond = 2.5; // Damage per detik untuk player tanpa perlindungan
+            DeadzoneProtectedDamagePerSecond = 0.5; // Damage per detik untuk player dengan perlindungan
+            DeadzoneUnprotectedRadiationPerSecond = 6.25; // Radiation per detik untuk player tanpa perlindungan
+            DeadzoneMaskFilterDamagePerSecond = 0.4; // Depletion rate untuk gasmask filter
         }
     }
 }

@@ -36,6 +36,12 @@ namespace RocketRadiationStorm
         private DateTime _safezoneRadiatorsCacheExpiryUtc = DateTime.MinValue;
         private readonly Dictionary<Type, SafezoneReflectionCache> _safezoneReflectionCache = new Dictionary<Type, SafezoneReflectionCache>();
         private bool _safezoneReflectionWarningLogged;
+        private DeadzoneNode _createdDeadzoneNode;
+        private static readonly FieldInfo LevelNodesDeadzoneNodesField = typeof(LevelNodes).GetField("deadzoneNodes", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly MethodInfo LevelNodesRegisterDeadzoneMethod = typeof(LevelNodes).GetMethod("registerDeadzone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly MethodInfo LevelNodesRemoveDeadzoneMethod = typeof(LevelNodes).GetMethod("removeDeadzone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly FieldInfo LevelSizeField = typeof(Level).GetField("size", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly PropertyInfo LevelSizeProperty = typeof(Level).GetProperty("size", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 
         public static RadiationStormPlugin Instance { get; private set; }
 
@@ -61,6 +67,7 @@ namespace RocketRadiationStorm
             StopStormDurationTimer();
             StopDamageDelayTimer();
             ClearRadiationEffectAll();
+            RemoveDeadzone();
             
             // Unsubscribe from player connected event
             Provider.onServerConnected -= OnPlayerConnected;
@@ -115,11 +122,12 @@ namespace RocketRadiationStorm
 
         private void ApplyRadiationTick()
         {
-            // Dengan UseRadiationEffect = true dan Effect 14780,
-            // game akan handle damage otomatis.
-            // Method ini untuk apply/maintain effect ke semua player secara berkala.
+            // Method ini untuk apply/maintain effect dan damage ke semua player secara berkala.
             
-            if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
+            var applyEffect = Configuration.Instance.UseRadiationEffect && Configuration.Instance.RadiationEffectId != 0;
+            var applyDamage = Configuration.Instance.InfectionDamagePerTick > 0;
+
+            if (!applyEffect && !applyDamage)
             {
                 return;
             }
@@ -143,9 +151,17 @@ namespace RocketRadiationStorm
                     continue;
                 }
 
-                // Pastikan effect tetap aktif untuk player ini
-                // Effect di-apply ulang secara berkala untuk memastikan tetap aktif
-                EnsureRadiationEffect(player, steamPlayer);
+                // Apply effect jika enabled
+                if (applyEffect)
+                {
+                    EnsureRadiationEffect(player, steamPlayer);
+                }
+
+                // Apply damage jika enabled
+                if (applyDamage)
+                {
+                    ApplyRadiationDamage(player);
+                }
             }
         }
 
@@ -161,6 +177,7 @@ namespace RocketRadiationStorm
             _nextStormTimeUtc = null;
             StartStormDurationCountdown();
             ActivateWeather();
+            CreateDeadzone();
             ScheduleDamageActivation();
             Broadcast("storm_start");
         }
@@ -176,6 +193,7 @@ namespace RocketRadiationStorm
             DeactivateDamagePhase();
             StopStormDurationTimer();
             DeactivateWeather();
+            RemoveDeadzone();
             Broadcast("storm_stop");
             ScheduleNextAutoStorm();
         }
@@ -483,6 +501,50 @@ namespace RocketRadiationStorm
                 true);
 
             _effectRecipients.Add(steamId);
+        }
+
+        private void ApplyRadiationDamage(UnturnedPlayer player)
+        {
+            if (player == null || player.Dead || player.Player == null || player.Player.life == null)
+            {
+                return;
+            }
+
+            var damage = Configuration.Instance.InfectionDamagePerTick;
+            if (damage <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                // Use askDamage for proper damage handling with death cause
+                var position = player.Position;
+                var deathCause = EDeathCause.INFECTION;
+                var limb = ELimb.SPINE;
+                var killer = CSteamID.Nil;
+                EPlayerKill killType;
+                var bypassSafezone = false; // Respect safezones
+                var ragdollEffect = ERagdollEffect.NONE;
+                var trackKill = false;
+                var dropLoot = true;
+
+                player.Player.life.askDamage(
+                    damage,
+                    position,
+                    deathCause,
+                    limb,
+                    killer,
+                    out killType,
+                    bypassSafezone,
+                    ragdollEffect,
+                    trackKill,
+                    dropLoot);
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Failed to apply radiation damage: {ex.Message}");
+            }
         }
 
         private void ClearRadiationEffectForPlayer(SteamPlayer steamPlayer)
@@ -1003,6 +1065,162 @@ namespace RocketRadiationStorm
 
             _oxygenReflectionWarningLogged = true;
             RocketLogger.LogWarning($"[RadiationStorm] {message} Oxygen safe zones will be ignored.");
+        }
+
+        private void CreateDeadzone()
+        {
+            if (!Configuration.Instance.UseDeadzone)
+            {
+                return;
+            }
+
+            try
+            {
+                // Remove existing deadzone if any
+                RemoveDeadzone();
+
+                // Get map size to calculate appropriate radius
+                byte mapSize = 0;
+                try
+                {
+                    if (LevelSizeProperty != null)
+                    {
+                        var sizeValue = LevelSizeProperty.GetValue(null);
+                        if (sizeValue is byte b)
+                        {
+                            mapSize = b;
+                        }
+                    }
+                    else if (LevelSizeField != null)
+                    {
+                        var sizeValue = LevelSizeField.GetValue(null);
+                        if (sizeValue is byte b)
+                        {
+                            mapSize = b;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Fallback: use default map size (usually 4 for large maps)
+                    mapSize = 4;
+                }
+
+                // Calculate map bounds based on size
+                // Map size: 0=small(512m), 1=medium(1024m), 2=large(2048m), 3=insane(4096m), 4=extreme(8192m)
+                float mapSizeInMeters = 512f * Mathf.Pow(2f, mapSize);
+                
+                // Calculate radius needed to cover entire map (diagonal distance from center to corner)
+                // Using diagonal: sqrt(2) * halfMapSize, plus some buffer
+                float halfMapSize = mapSizeInMeters / 2f;
+                float diagonalDistance = Mathf.Sqrt(2f) * halfMapSize;
+                float radius = Mathf.Max((float)Configuration.Instance.DeadzoneRadius, diagonalDistance + 100f); // Add 100m buffer
+
+                // Create single deadzone node at map center (0, 0, 0) with calculated radius
+                var deadzoneNode = new DeadzoneNode
+                {
+                    point = Vector3.zero, // Center of map
+                    radius = radius,
+                    type = EDeadzoneType.DefaultRadiation
+                };
+
+                // Set damage properties using reflection
+                var nodeType = typeof(DeadzoneNode);
+                var unprotectedDamageProp = nodeType.GetProperty("UnprotectedDamagePerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var protectedDamageProp = nodeType.GetProperty("ProtectedDamagePerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var unprotectedRadiationProp = nodeType.GetProperty("UnprotectedRadiationPerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var maskFilterDamageProp = nodeType.GetProperty("MaskFilterDamagePerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                if (unprotectedDamageProp != null && unprotectedDamageProp.CanWrite)
+                {
+                    unprotectedDamageProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneUnprotectedDamagePerSecond);
+                }
+
+                if (protectedDamageProp != null && protectedDamageProp.CanWrite)
+                {
+                    protectedDamageProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneProtectedDamagePerSecond);
+                }
+
+                if (unprotectedRadiationProp != null && unprotectedRadiationProp.CanWrite)
+                {
+                    unprotectedRadiationProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneUnprotectedRadiationPerSecond);
+                }
+
+                if (maskFilterDamageProp != null && maskFilterDamageProp.CanWrite)
+                {
+                    maskFilterDamageProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneMaskFilterDamagePerSecond);
+                }
+
+                // Register deadzone using reflection
+                if (LevelNodesRegisterDeadzoneMethod != null)
+                {
+                    LevelNodesRegisterDeadzoneMethod.Invoke(null, new object[] { deadzoneNode });
+                    _createdDeadzoneNode = deadzoneNode;
+                    RocketLogger.Log($"[RadiationStorm] Created single deadzone node covering entire map ({mapSizeInMeters}m x {mapSizeInMeters}m) with radius {radius}m.");
+                }
+                else
+                {
+                    // Fallback: try to add directly to deadzoneNodes list
+                    if (LevelNodesDeadzoneNodesField != null)
+                    {
+                        var deadzoneNodes = LevelNodesDeadzoneNodesField.GetValue(null);
+                        if (deadzoneNodes is List<DeadzoneNode> nodes)
+                        {
+                            nodes.Add(deadzoneNode);
+                            _createdDeadzoneNode = deadzoneNode;
+                            RocketLogger.Log($"[RadiationStorm] Created single deadzone node covering entire map ({mapSizeInMeters}m x {mapSizeInMeters}m) with radius {radius}m.");
+                        }
+                        else
+                        {
+                            RocketLogger.LogWarning("[RadiationStorm] Unable to access deadzoneNodes list. Deadzone creation failed.");
+                        }
+                    }
+                    else
+                    {
+                        RocketLogger.LogWarning("[RadiationStorm] Unable to locate deadzone registration methods. Deadzone creation failed.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Failed to create deadzone: {ex.Message}");
+            }
+        }
+
+        private void RemoveDeadzone()
+        {
+            if (_createdDeadzoneNode == null)
+            {
+                return;
+            }
+
+            try
+            {
+                // Remove deadzone using reflection
+                if (LevelNodesRemoveDeadzoneMethod != null)
+                {
+                    LevelNodesRemoveDeadzoneMethod.Invoke(null, new object[] { _createdDeadzoneNode });
+                }
+                else
+                {
+                    // Fallback: try to remove directly from deadzoneNodes list
+                    if (LevelNodesDeadzoneNodesField != null)
+                    {
+                        var deadzoneNodes = LevelNodesDeadzoneNodesField.GetValue(null);
+                        if (deadzoneNodes is List<DeadzoneNode> nodes)
+                        {
+                            nodes.Remove(_createdDeadzoneNode);
+                        }
+                    }
+                }
+
+                RocketLogger.Log("[RadiationStorm] Removed deadzone node.");
+                _createdDeadzoneNode = null;
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Failed to remove deadzone: {ex.Message}");
+            }
         }
 
         private void OnPlayerConnected(CSteamID steamId)
