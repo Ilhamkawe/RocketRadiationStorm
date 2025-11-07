@@ -19,7 +19,7 @@ namespace RocketRadiationStorm
         private Timer _autoStormTimer;
         private Timer _stormDurationTimer;
         private Timer _damageDelayTimer;
-        private readonly HashSet<ulong> _effectRecipients = new HashSet<ulong>();
+        private readonly HashSet<CSteamID> _effectRecipients = new HashSet<CSteamID>();
         private bool _stormActive;
         private bool _damageActive;
         private DateTime? _nextStormTimeUtc;
@@ -288,7 +288,7 @@ namespace RocketRadiationStorm
 
             try
             {
-                Provider.serverExecuteCommand($"weather add {Configuration.Instance.WeatherGuid}");
+                CommandWindow.inputtedCommand($"weather add {Configuration.Instance.WeatherGuid}");
             }
             catch (Exception ex)
             {
@@ -305,7 +305,7 @@ namespace RocketRadiationStorm
 
             try
             {
-                Provider.serverExecuteCommand($"weather remove {Configuration.Instance.WeatherGuid}");
+                CommandWindow.inputtedCommand($"weather remove {Configuration.Instance.WeatherGuid}");
             }
             catch (Exception ex)
             {
@@ -437,7 +437,9 @@ namespace RocketRadiationStorm
                 return;
             }
 
-            if (_effectRecipients.Contains(steamPlayer.playerID.steamID.m_SteamID))
+            var steamId = steamPlayer.playerID.steamID;
+
+            if (_effectRecipients.Contains(steamId))
             {
                 return;
             }
@@ -445,10 +447,10 @@ namespace RocketRadiationStorm
             EffectManager.sendUIEffect(
                 Configuration.Instance.RadiationEffectId,
                 Configuration.Instance.RadiationEffectKey,
-                steamPlayer,
+                steamId,
                 true);
 
-            _effectRecipients.Add(steamPlayer.playerID.steamID.m_SteamID);
+            _effectRecipients.Add(steamId);
         }
 
         private void ClearRadiationEffectAll()
@@ -461,7 +463,7 @@ namespace RocketRadiationStorm
 
             foreach (var steamPlayer in Provider.clients)
             {
-                EffectManager.sendUIEffectClear(Configuration.Instance.RadiationEffectKey, steamPlayer);
+                EffectManager.askEffectClearByID(steamPlayer.playerID.steamID, Configuration.Instance.RadiationEffectId);
             }
 
             _effectRecipients.Clear();
