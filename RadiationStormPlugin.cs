@@ -443,7 +443,7 @@ namespace RocketRadiationStorm
                 return;
             }
 
-            if (IsPlayerInOxygenSafeZone(steamPlayer))
+            if (Configuration.Instance.RespectOxygenSafeZones && IsPlayerInOxygenSafeZone(steamPlayer))
             {
                 ClearRadiationEffectForPlayer(steamPlayer);
                 return;
@@ -512,7 +512,7 @@ namespace RocketRadiationStorm
                 return true;
             }
 
-            if (IsPlayerInOxygenSafeZone(steamPlayer))
+            if (Configuration.Instance.RespectOxygenSafeZones && IsPlayerInOxygenSafeZone(steamPlayer))
             {
                 ClearRadiationEffectForPlayer(steamPlayer);
                 return true;
@@ -652,13 +652,49 @@ namespace RocketRadiationStorm
         {
             info = default;
 
-            var barricade = drop.barricade;
-            if (barricade == null)
+            if (drop == null)
             {
                 return false;
             }
 
-            var asset = barricade.asset as ItemBarricadeAsset;
+            // Access barricade asset via reflection
+            ItemBarricadeAsset asset = null;
+            try
+            {
+                // Try common property names
+                var barricadeType = typeof(BarricadeDrop);
+                var barricadeProp = barricadeType.GetProperty("barricade", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    ?? barricadeType.GetProperty("serverAsset", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    ?? barricadeType.GetProperty("asset", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                if (barricadeProp != null)
+                {
+                    var barricadeObj = barricadeProp.GetValue(drop);
+                    if (barricadeObj != null)
+                    {
+                        var assetProp = barricadeObj.GetType().GetProperty("asset", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                        if (assetProp != null)
+                        {
+                            asset = assetProp.GetValue(barricadeObj) as ItemBarricadeAsset;
+                        }
+                    }
+                }
+
+                // Fallback: try direct asset property on BarricadeDrop
+                if (asset == null)
+                {
+                    var directAssetProp = barricadeType.GetProperty("asset", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (directAssetProp != null)
+                    {
+                        asset = directAssetProp.GetValue(drop) as ItemBarricadeAsset;
+                    }
+                }
+            }
+            catch
+            {
+                // Reflection failed, try alternative approach
+            }
+
             if (asset == null)
             {
                 return false;
@@ -882,6 +918,17 @@ namespace RocketRadiationStorm
             }
 
             return fallback;
+        }
+
+        private bool IsPlayerInOxygenSafeZone(SteamPlayer steamPlayer)
+        {
+            if (!Configuration.Instance.RespectOxygenSafeZones || steamPlayer?.player == null)
+            {
+                return false;
+            }
+
+            var position = steamPlayer.player.transform.position;
+            return TryIsInsideOxygenSafeZone(position, out var alpha) && alpha >= Math.Max(0f, (float)Configuration.Instance.OxygenSafeAlphaThreshold);
         }
 
         private bool TryIsInsideOxygenSafeZone(Vector3 position, out float alpha)
