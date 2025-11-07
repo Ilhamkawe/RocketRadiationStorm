@@ -118,7 +118,7 @@ namespace RocketRadiationStorm
 
                 var currentInfection = player.Infection;
 
-                if (currentInfection == 0)
+                if (currentInfection >= 100)
                 {
                     continue;
                 }
@@ -130,7 +130,7 @@ namespace RocketRadiationStorm
                     continue;
                 }
 
-                var newValue = (byte)Math.Max(0, currentInfection - damage);
+                var newValue = (byte)Math.Min(100, currentInfection + damage);
 
                 if (newValue == currentInfection)
                 {
