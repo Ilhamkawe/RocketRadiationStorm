@@ -100,17 +100,22 @@ namespace RocketRadiationStorm
 
         private void ApplyRadiationTick()
         {
+            var playerCount = Provider.clients.Count;
+            RocketLogger.Log($"[RadiationStorm] ApplyRadiationTick called. Players online: {playerCount}");
+
             foreach (var steamPlayer in Provider.clients)
             {
                 var player = UnturnedPlayer.FromSteamPlayer(steamPlayer);
 
                 if (player == null || player.Dead)
                 {
+                    RocketLogger.Log($"[RadiationStorm] Skipping null/dead player");
                     continue;
                 }
 
                 if (!Configuration.Instance.TargetUnturnedAdmins && player.IsAdmin)
                 {
+                    RocketLogger.Log($"[RadiationStorm] Skipping admin: {player.DisplayName}");
                     continue;
                 }
 
@@ -118,8 +123,10 @@ namespace RocketRadiationStorm
 
                 var currentInfection = player.Infection;
 
-                if (currentInfection >= 100)
+                // Infection bar sudah 0, biarkan game handle health damage
+                if (currentInfection == 0)
                 {
+                    RocketLogger.Log($"[RadiationStorm] {player.DisplayName} infection already at 0 (health will drain)");
                     continue;
                 }
 
@@ -127,17 +134,21 @@ namespace RocketRadiationStorm
 
                 if (damage <= 0)
                 {
+                    RocketLogger.Log($"[RadiationStorm] Damage is 0 or negative: {damage}");
                     continue;
                 }
 
-                var newValue = (byte)Math.Min(100, currentInfection + damage);
+                // KURANGI infection bar (bar hijau turun)
+                var newValue = (byte)Math.Max(0, currentInfection - damage);
 
                 if (newValue == currentInfection)
                 {
+                    RocketLogger.Log($"[RadiationStorm] No change for {player.DisplayName}: {currentInfection}");
                     continue;
                 }
 
                 player.Infection = newValue;
+                RocketLogger.Log($"[RadiationStorm] {player.DisplayName} infection bar: {currentInfection} -> {newValue}");
             }
         }
 
@@ -292,7 +303,8 @@ namespace RocketRadiationStorm
 
             try
             {
-                ExecuteWeatherCommand($"weather add {Configuration.Instance.WeatherGuid}");
+                ExecuteWeatherCommand($"weather {Configuration.Instance.WeatherGuid}");
+                RocketLogger.Log($"[RadiationStorm] Activated weather: {Configuration.Instance.WeatherGuid}");
             }
             catch (Exception ex)
             {
@@ -309,7 +321,8 @@ namespace RocketRadiationStorm
 
             try
             {
-                ExecuteWeatherCommand($"weather remove {Configuration.Instance.WeatherGuid}");
+                ExecuteWeatherCommand("weather none");
+                RocketLogger.Log("[RadiationStorm] Deactivated weather.");
             }
             catch (Exception ex)
             {
