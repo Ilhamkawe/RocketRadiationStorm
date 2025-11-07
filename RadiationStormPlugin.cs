@@ -23,7 +23,7 @@ namespace RocketRadiationStorm
         private bool _stormActive;
         private bool _damageActive;
         private DateTime? _nextStormTimeUtc;
-        private readonly Random _random = new Random();
+        private readonly System.Random _random = new System.Random();
 
         public static RadiationStormPlugin Instance { get; private set; }
 
