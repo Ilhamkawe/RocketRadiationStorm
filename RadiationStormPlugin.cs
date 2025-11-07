@@ -44,6 +44,8 @@ namespace RocketRadiationStorm
         private static readonly MethodInfo LevelNodesRemoveDeadzoneMethod = typeof(LevelNodes).GetMethod("removeDeadzone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly FieldInfo LevelSizeField = typeof(Level).GetField("size", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo LevelSizeProperty = typeof(Level).GetProperty("size", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly MethodInfo LevelNodesLoadDeadzonesMethod = typeof(LevelNodes).GetMethod("loadDeadzones", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly MethodInfo LevelNodesRefreshDeadzonesMethod = typeof(LevelNodes).GetMethod("refreshDeadzones", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 
         public static RadiationStormPlugin Instance { get; private set; }
 
@@ -1093,32 +1095,106 @@ namespace RocketRadiationStorm
                     return;
                 }
 
+                bool registered = false;
+                
+                // Try using registerDeadzone method first
                 if (LevelNodesRegisterDeadzoneMethod != null)
                 {
-                    LevelNodesRegisterDeadzoneMethod.Invoke(null, new object[] { deadzoneNode });
-                    _createdDeadzoneNode = deadzoneNode;
-                }
-                else if (LevelNodesDeadzoneNodesField != null)
-                {
-                    var deadzoneNodes = LevelNodesDeadzoneNodesField.GetValue(null);
-                    if (deadzoneNodes is List<DeadzoneNode> nodes)
+                    try
                     {
-                        nodes.Add(deadzoneNode);
+                        LevelNodesRegisterDeadzoneMethod.Invoke(null, new object[] { deadzoneNode });
                         _createdDeadzoneNode = deadzoneNode;
+                        registered = true;
+                        RocketLogger.Log("[RadiationStorm] Deadzone node registered using registerDeadzone method.");
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        RocketLogger.LogWarning("[RadiationStorm] Unable to access deadzoneNodes list. Deadzone creation failed.");
-                        return;
+                        RocketLogger.LogWarning($"[RadiationStorm] Failed to register deadzone using registerDeadzone method: {ex.Message}");
                     }
                 }
-                else
+                
+                // Fallback: try to add directly to deadzoneNodes list
+                if (!registered && LevelNodesDeadzoneNodesField != null)
                 {
-                    RocketLogger.LogWarning("[RadiationStorm] Unable to locate deadzone registration methods. Deadzone creation failed.");
+                    try
+                    {
+                        var deadzoneNodes = LevelNodesDeadzoneNodesField.GetValue(null);
+                        if (deadzoneNodes is List<DeadzoneNode> nodes)
+                        {
+                            nodes.Add(deadzoneNode);
+                            _createdDeadzoneNode = deadzoneNode;
+                            registered = true;
+                            RocketLogger.Log("[RadiationStorm] Deadzone node added directly to deadzoneNodes list.");
+                        }
+                        else
+                        {
+                            RocketLogger.LogWarning($"[RadiationStorm] deadzoneNodes field is not a List<DeadzoneNode>, it's: {deadzoneNodes?.GetType().Name ?? "null"}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        RocketLogger.LogWarning($"[RadiationStorm] Failed to add deadzone to list: {ex.Message}");
+                    }
+                }
+                
+                if (!registered)
+                {
+                    RocketLogger.LogWarning("[RadiationStorm] Unable to register deadzone node. Deadzone effects may not work.");
+                    RocketLogger.LogWarning($"[RadiationStorm] registerDeadzone method: {(LevelNodesRegisterDeadzoneMethod != null ? "found" : "not found")}");
+                    RocketLogger.LogWarning($"[RadiationStorm] deadzoneNodes field: {(LevelNodesDeadzoneNodesField != null ? "found" : "not found")}");
                     return;
                 }
 
-                RocketLogger.Log($"[RadiationStorm] Created single deadzone node covering entire map ({mapSizeInMeters}m x {mapSizeInMeters}m) with radius {deadzoneNode.radius}m.");
+                // Try to refresh deadzone system
+                try
+                {
+                    if (LevelNodesRefreshDeadzonesMethod != null)
+                    {
+                        LevelNodesRefreshDeadzonesMethod.Invoke(null, null);
+                        RocketLogger.Log("[RadiationStorm] Deadzone system refreshed.");
+                    }
+                    else if (LevelNodesLoadDeadzonesMethod != null)
+                    {
+                        LevelNodesLoadDeadzonesMethod.Invoke(null, null);
+                        RocketLogger.Log("[RadiationStorm] Deadzone system reloaded.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    RocketLogger.LogWarning($"[RadiationStorm] Failed to refresh deadzone system: {ex.Message}");
+                }
+
+                // Log deadzone node details for debugging
+                RocketLogger.Log($"[RadiationStorm] Created deadzone node:");
+                RocketLogger.Log($"  - Position: {deadzoneNode.point}");
+                RocketLogger.Log($"  - Radius: {deadzoneNode.radius}");
+                RocketLogger.Log($"  - Type: {deadzoneNode.type}");
+                RocketLogger.Log($"  - Map size: {mapSizeInMeters}m x {mapSizeInMeters}m");
+                
+                // Verify node was added
+                if (LevelNodesDeadzoneNodesField != null)
+                {
+                    try
+                    {
+                        var deadzoneNodes = LevelNodesDeadzoneNodesField.GetValue(null);
+                        if (deadzoneNodes is List<DeadzoneNode> nodes)
+                        {
+                            RocketLogger.Log($"[RadiationStorm] Total deadzone nodes in system: {nodes.Count}");
+                            if (nodes.Contains(deadzoneNode))
+                            {
+                                RocketLogger.Log("[RadiationStorm] ✓ Deadzone node confirmed in system.");
+                            }
+                            else
+                            {
+                                RocketLogger.LogWarning("[RadiationStorm] ✗ Deadzone node NOT found in system after registration!");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        RocketLogger.LogWarning($"[RadiationStorm] Failed to verify deadzone node: {ex.Message}");
+                    }
+                }
             }
             catch (Exception ex)
             {
