@@ -1,11 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net35</TargetFramework>
+    <TargetFramework>net48</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <AssemblyName>RocketRadiationStorm</AssemblyName>
     <RootNamespace>RocketRadiationStorm</RootNamespace>
-    <Platforms>x86</Platforms>
+    <Platforms>AnyCPU</Platforms>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 
@@ -23,11 +23,11 @@
       <Private>false</Private>
     </Reference>
     <Reference Include="Assembly-CSharp">
-      <HintPath>lib\Assembly-CSharp.dll</HintPath>
+      <HintPath>RocketModFix.Unturned.Redist.Server.3.25.9.2\lib\net48\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="SDG.Unturned">
-      <HintPath>lib\SDG.Unturned.dll</HintPath>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>lib\UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine">
