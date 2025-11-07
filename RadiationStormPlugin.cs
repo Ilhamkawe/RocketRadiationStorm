@@ -28,6 +28,14 @@ namespace RocketRadiationStorm
         private DateTime? _nextStormTimeUtc;
         private readonly System.Random _random = new System.Random();
         private MethodInfo _weatherCommandMethod;
+        private static readonly PropertyInfo OxygenVolumeManagerInstanceProperty = typeof(OxygenVolumeManager).GetProperty("instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly FieldInfo OxygenVolumeManagerInstanceField = typeof(OxygenVolumeManager).GetField("instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly MethodInfo OxygenVolumeManagerBreathableMethod = typeof(OxygenVolumeManager).GetMethod("IsPositionInsideBreathableVolume", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private bool _oxygenReflectionWarningLogged;
+        private readonly List<SafezoneRadiatorInfo> _safezoneRadiators = new List<SafezoneRadiatorInfo>();
+        private DateTime _safezoneRadiatorsCacheExpiryUtc = DateTime.MinValue;
+        private readonly Dictionary<Type, SafezoneReflectionCache> _safezoneReflectionCache = new Dictionary<Type, SafezoneReflectionCache>();
+        private bool _safezoneReflectionWarningLogged;
 
         public static RadiationStormPlugin Instance { get; private set; }
 
@@ -118,9 +126,8 @@ namespace RocketRadiationStorm
                     continue;
                 }
 
-                if (IsPlayerInOxygenSafeZone(steamPlayer))
+                if (IsPlayerProtectedFromRadiation(steamPlayer))
                 {
-                    ClearRadiationEffectForPlayer(steamPlayer);
                     continue;
                 }
 
@@ -426,6 +433,11 @@ namespace RocketRadiationStorm
 
         private void EnsureRadiationEffect(UnturnedPlayer player, SteamPlayer steamPlayer)
         {
+            if (IsPlayerProtectedFromRadiation(steamPlayer))
+            {
+                return;
+            }
+
             if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
             {
                 return;
@@ -487,25 +499,443 @@ namespace RocketRadiationStorm
             _effectRecipients.Clear();
         }
 
-        private bool IsPlayerInOxygenSafeZone(SteamPlayer steamPlayer)
+        private bool IsPlayerProtectedFromRadiation(SteamPlayer steamPlayer)
         {
-            if (!Configuration.Instance.RespectOxygenSafeZones)
+            if (steamPlayer == null)
             {
                 return false;
             }
 
-            if (steamPlayer?.player == null)
+            if (IsPlayerInSafezoneRadiator(steamPlayer))
+            {
+                ClearRadiationEffectForPlayer(steamPlayer);
+                return true;
+            }
+
+            if (IsPlayerInOxygenSafeZone(steamPlayer))
+            {
+                ClearRadiationEffectForPlayer(steamPlayer);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool IsPlayerInSafezoneRadiator(SteamPlayer steamPlayer)
+        {
+            if (!Configuration.Instance.RespectSafezoneRadiators || steamPlayer?.player == null)
+            {
+                return false;
+            }
+
+            UpdateSafezoneRadiatorCacheIfNeeded();
+
+            if (_safezoneRadiators.Count == 0)
             {
                 return false;
             }
 
             var position = steamPlayer.player.transform.position;
-            if (OxygenVolumeManager.IsPositionInsideBreathableVolume(position, out var alpha))
+
+            for (var i = 0; i < _safezoneRadiators.Count; i++)
             {
-                return alpha >= Math.Max(0f, (float)Configuration.Instance.OxygenSafeAlphaThreshold);
+                var info = _safezoneRadiators[i];
+                if ((position - info.Position).sqrMagnitude <= info.SqrRadius)
+                {
+                    return true;
+                }
             }
 
             return false;
+        }
+
+        private void UpdateSafezoneRadiatorCacheIfNeeded()
+        {
+            if (!Configuration.Instance.RespectSafezoneRadiators)
+            {
+                _safezoneRadiators.Clear();
+                _safezoneRadiatorsCacheExpiryUtc = DateTime.MinValue;
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            if (now < _safezoneRadiatorsCacheExpiryUtc)
+            {
+                return;
+            }
+
+            _safezoneRadiatorsCacheExpiryUtc = now.AddSeconds(Math.Max(1.0, Configuration.Instance.SafezoneRadiatorRefreshSeconds));
+            _safezoneRadiators.Clear();
+
+            try
+            {
+                CollectSafezoneRadiators(_safezoneRadiators);
+            }
+            catch (Exception ex)
+            {
+                if (!_safezoneReflectionWarningLogged)
+                {
+                    _safezoneReflectionWarningLogged = true;
+                    RocketLogger.LogWarning($"[RadiationStorm] Failed to refresh safezone radiators: {ex.Message}");
+                }
+            }
+        }
+
+        private void CollectSafezoneRadiators(List<SafezoneRadiatorInfo> buffer)
+        {
+            var ids = Configuration.Instance.SafezoneRadiatorItemIds;
+            if (ids == null || ids.Count == 0)
+            {
+                return;
+            }
+
+            var regions = BarricadeManager.regions;
+            if (regions != null)
+            {
+                var lengthX = regions.GetLength(0);
+                var lengthY = regions.GetLength(1);
+
+                for (var x = 0; x < lengthX; x++)
+                {
+                    for (var y = 0; y < lengthY; y++)
+                    {
+                        var region = regions[x, y];
+                        if (region == null)
+                        {
+                            continue;
+                        }
+
+                        AddRadiatorsFromRegion(region, buffer, ids);
+                    }
+                }
+            }
+
+            var vehicleRegions = BarricadeManager.vehicleRegions;
+            if (vehicleRegions != null)
+            {
+                foreach (var region in vehicleRegions)
+                {
+                    if (region == null)
+                    {
+                        continue;
+                    }
+
+                    AddRadiatorsFromRegion(region, buffer, ids);
+                }
+            }
+        }
+
+        private void AddRadiatorsFromRegion(BarricadeRegion region, List<SafezoneRadiatorInfo> buffer, IList<ushort> ids)
+        {
+            var drops = region.drops;
+            if (drops == null)
+            {
+                return;
+            }
+
+            for (var i = 0; i < drops.Count; i++)
+            {
+                var drop = drops[i];
+                if (drop == null)
+                {
+                    continue;
+                }
+
+                if (TryCreateSafezoneRadiatorInfo(drop, ids, out var info))
+                {
+                    buffer.Add(info);
+                }
+            }
+        }
+
+        private bool TryCreateSafezoneRadiatorInfo(BarricadeDrop drop, IList<ushort> ids, out SafezoneRadiatorInfo info)
+        {
+            info = default;
+
+            var barricade = drop.barricade;
+            if (barricade == null)
+            {
+                return false;
+            }
+
+            var asset = barricade.asset as ItemBarricadeAsset;
+            if (asset == null)
+            {
+                return false;
+            }
+
+            if (!ids.Contains(asset.id))
+            {
+                return false;
+            }
+
+            var transform = drop.model ?? drop.interactable?.transform;
+            if (transform == null)
+            {
+                return false;
+            }
+
+            var radius = (float)Configuration.Instance.SafezoneRadiatorDefaultRadius;
+            var isPowered = true;
+
+            var interactable = drop.interactable;
+            if (interactable != null)
+            {
+                var cache = GetSafezoneReflectionCache(interactable.GetType());
+
+                if (cache.TryGetRadius(interactable, out var detectedRadius) && detectedRadius > 0f)
+                {
+                    radius = detectedRadius;
+                }
+
+                if (Configuration.Instance.SafezoneRadiatorRequiresPower && cache.TryGetActive(interactable, out var active))
+                {
+                    isPowered = active;
+                }
+            }
+
+            if (Configuration.Instance.SafezoneRadiatorRequiresPower && !isPowered)
+            {
+                return false;
+            }
+
+            if (radius <= 0f)
+            {
+                radius = (float)Configuration.Instance.SafezoneRadiatorDefaultRadius;
+            }
+
+            info = new SafezoneRadiatorInfo
+            {
+                Position = transform.position,
+                Radius = radius,
+                SqrRadius = radius * radius
+            };
+
+            return true;
+        }
+
+        private SafezoneReflectionCache GetSafezoneReflectionCache(Type type)
+        {
+            if (!_safezoneReflectionCache.TryGetValue(type, out var cache))
+            {
+                cache = BuildSafezoneReflectionCache(type);
+                _safezoneReflectionCache[type] = cache;
+            }
+
+            return cache;
+        }
+
+        private SafezoneReflectionCache BuildSafezoneReflectionCache(Type type)
+        {
+            var cache = new SafezoneReflectionCache();
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            foreach (var field in type.GetFields(flags))
+            {
+                var name = field.Name.ToLowerInvariant();
+                if (cache.RadiusAccessor == null && name.Contains("radius"))
+                {
+                    cache.RadiusAccessor = obj => field.GetValue(obj);
+                }
+
+                if (cache.ActiveAccessor == null && (name.Contains("powered") || name.Contains("active") || name.Contains("enabled")))
+                {
+                    cache.ActiveAccessor = obj => field.GetValue(obj);
+                }
+
+                if (cache.IsComplete)
+                {
+                    break;
+                }
+            }
+
+            if (!cache.IsComplete)
+            {
+                foreach (var property in type.GetProperties(flags))
+                {
+                    if (!property.CanRead)
+                    {
+                        continue;
+                    }
+
+                    var name = property.Name.ToLowerInvariant();
+                    var getter = property.GetGetMethod(true);
+                    if (getter == null)
+                    {
+                        continue;
+                    }
+
+                    if (cache.RadiusAccessor == null && name.Contains("radius"))
+                    {
+                        cache.RadiusAccessor = obj => getter.Invoke(obj, null);
+                    }
+
+                    if (cache.ActiveAccessor == null && (name.Contains("powered") || name.Contains("active") || name.Contains("enabled")))
+                    {
+                        cache.ActiveAccessor = obj => getter.Invoke(obj, null);
+                    }
+
+                    if (cache.IsComplete)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return cache;
+        }
+
+        private bool TryIsInsideSafezoneRadiator(SteamPlayer steamPlayer, out SafezoneRadiatorInfo info)
+        {
+            info = default;
+
+            if (!Configuration.Instance.RespectSafezoneRadiators)
+            {
+                return false;
+            }
+
+            UpdateSafezoneRadiatorCacheIfNeeded();
+
+            if (_safezoneRadiators.Count == 0)
+            {
+                return false;
+            }
+
+            var position = steamPlayer.player.transform.position;
+
+            for (var i = 0; i < _safezoneRadiators.Count; i++)
+            {
+                var candidate = _safezoneRadiators[i];
+                if ((position - candidate.Position).sqrMagnitude <= candidate.SqrRadius)
+                {
+                    info = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static float ConvertToFloat(object value, float fallback)
+        {
+            switch (value)
+            {
+                case null:
+                    return fallback;
+                case float f:
+                    return f;
+                case double d:
+                    return (float)d;
+                case int i:
+                    return i;
+                case uint ui:
+                    return ui;
+                case long l:
+                    return l;
+                case ulong ul:
+                    return ul;
+                case short s:
+                    return s;
+                case ushort us:
+                    return us;
+                case byte b:
+                    return b;
+                case sbyte sb:
+                    return sb;
+                case decimal dec:
+                    return (float)dec;
+            }
+
+            if (float.TryParse(value.ToString(), out var parsed))
+            {
+                return parsed;
+            }
+
+            return fallback;
+        }
+
+        private static bool ConvertToBool(object value, bool fallback)
+        {
+            switch (value)
+            {
+                case null:
+                    return fallback;
+                case bool b:
+                    return b;
+                case byte bt:
+                    return bt != 0;
+                case sbyte sb:
+                    return sb != 0;
+                case int i:
+                    return i != 0;
+                case uint ui:
+                    return ui != 0;
+                case long l:
+                    return l != 0L;
+                case ulong ul:
+                    return ul != 0UL;
+            }
+
+            if (bool.TryParse(value.ToString(), out var parsed))
+            {
+                return parsed;
+            }
+
+            return fallback;
+        }
+
+        private bool TryIsInsideOxygenSafeZone(Vector3 position, out float alpha)
+        {
+            alpha = 0f;
+
+            if (OxygenVolumeManagerBreathableMethod == null)
+            {
+                LogOxygenReflectionWarningOnce("Unable to resolve OxygenVolumeManager.IsPositionInsideBreathableVolume.");
+                return false;
+            }
+
+            object manager = null;
+
+            try
+            {
+                manager = OxygenVolumeManagerInstanceProperty?.GetValue(null) ?? OxygenVolumeManagerInstanceField?.GetValue(null);
+            }
+            catch (Exception ex)
+            {
+                LogOxygenReflectionWarningOnce($"Failed to access OxygenVolumeManager instance: {ex.Message}");
+                return false;
+            }
+
+            if (manager == null)
+            {
+                LogOxygenReflectionWarningOnce("OxygenVolumeManager instance not available.");
+                return false;
+            }
+
+            var args = new object[] { position, 0f };
+
+            try
+            {
+                var result = OxygenVolumeManagerBreathableMethod.Invoke(manager, args);
+                alpha = (float)args[1];
+                return result is bool inside && inside;
+            }
+            catch (Exception ex)
+            {
+                LogOxygenReflectionWarningOnce($"Oxygen safe zone check failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void LogOxygenReflectionWarningOnce(string message)
+        {
+            if (_oxygenReflectionWarningLogged)
+            {
+                return;
+            }
+
+            _oxygenReflectionWarningLogged = true;
+            RocketLogger.LogWarning($"[RadiationStorm] {message} Oxygen safe zones will be ignored.");
         }
 
         private void ExecuteWeatherCommand(string command)
@@ -545,6 +975,45 @@ namespace RocketRadiationStorm
             {
                 RocketLogger.LogWarning($"[RadiationStorm] Weather command failed: {ex.Message}");
             }
+        }
+
+        private sealed class SafezoneReflectionCache
+        {
+            public Func<object, object> RadiusAccessor;
+            public Func<object, object> ActiveAccessor;
+
+            public bool TryGetRadius(object instance, out float radius)
+            {
+                if (RadiusAccessor != null)
+                {
+                    radius = ConvertToFloat(RadiusAccessor(instance), 0f);
+                    return true;
+                }
+
+                radius = 0f;
+                return false;
+            }
+
+            public bool TryGetActive(object instance, out bool isActive)
+            {
+                if (ActiveAccessor != null)
+                {
+                    isActive = ConvertToBool(ActiveAccessor(instance), true);
+                    return true;
+                }
+
+                isActive = true;
+                return false;
+            }
+
+            public bool IsComplete => RadiusAccessor != null && ActiveAccessor != null;
+        }
+
+        private struct SafezoneRadiatorInfo
+        {
+            public Vector3 Position;
+            public float Radius;
+            public float SqrRadius;
         }
     }
 }

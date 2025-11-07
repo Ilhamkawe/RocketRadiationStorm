@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using Rocket.API;
 
@@ -24,6 +25,11 @@ namespace RocketRadiationStorm
         public short RadiationEffectKey { get; set; }
         public bool RespectOxygenSafeZones { get; set; }
         public double OxygenSafeAlphaThreshold { get; set; }
+        public bool RespectSafezoneRadiators { get; set; }
+        public List<ushort> SafezoneRadiatorItemIds { get; set; }
+        public double SafezoneRadiatorDefaultRadius { get; set; }
+        public double SafezoneRadiatorRefreshSeconds { get; set; }
+        public bool SafezoneRadiatorRequiresPower { get; set; }
 
         public void LoadDefaults()
         {
@@ -41,8 +47,13 @@ namespace RocketRadiationStorm
             UseRadiationEffect = true; // Aktifkan deadzone effect
             RadiationEffectId = 14780; // Deadzone effect (tengkorak + damage)
             RadiationEffectKey = 514;
-            RespectOxygenSafeZones = true;
+            RespectOxygenSafeZones = false;
             OxygenSafeAlphaThreshold = 0.05; // Minimal alpha untuk dianggap aman (5%)
+            RespectSafezoneRadiators = true;
+            SafezoneRadiatorItemIds = new List<ushort> { 1242 }; // Safezone Radiator bawaan
+            SafezoneRadiatorDefaultRadius = 8.0; // Radius asli sekitar 8 meter
+            SafezoneRadiatorRefreshSeconds = 5.0;
+            SafezoneRadiatorRequiresPower = true;
         }
     }
 }
