@@ -3,6 +3,7 @@ extern alias SteamworksNET;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.Serialization;
 using System.Timers;
 using Rocket.API.Collections;
 using Rocket.Core.Plugins;
@@ -36,6 +37,7 @@ namespace RocketRadiationStorm
         private DateTime _safezoneRadiatorsCacheExpiryUtc = DateTime.MinValue;
         private readonly Dictionary<Type, SafezoneReflectionCache> _safezoneReflectionCache = new Dictionary<Type, SafezoneReflectionCache>();
         private bool _safezoneReflectionWarningLogged;
+        private static readonly BindingFlags DeadzoneReflectionFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private DeadzoneNode _createdDeadzoneNode;
         private static readonly FieldInfo LevelNodesDeadzoneNodesField = typeof(LevelNodes).GetField("deadzoneNodes", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly MethodInfo LevelNodesRegisterDeadzoneMethod = typeof(LevelNodes).GetMethod("registerDeadzone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
@@ -1076,114 +1078,280 @@ namespace RocketRadiationStorm
 
             try
             {
-                // Remove existing deadzone if any
                 RemoveDeadzone();
 
-                // Get map size to calculate appropriate radius
-                byte mapSize = 0;
-                try
+                var mapSize = ResolveMapSize();
+                var mapSizeInMeters = 512f * Mathf.Pow(2f, mapSize);
+                var halfMapSize = mapSizeInMeters / 2f;
+                var diagonalDistance = Mathf.Sqrt(2f) * halfMapSize;
+                var radius = Mathf.Max((float)Configuration.Instance.DeadzoneRadius, diagonalDistance + 100f);
+
+                var deadzoneNode = BuildDeadzoneNode(Vector3.zero, radius);
+                if (deadzoneNode == null)
                 {
-                    if (LevelSizeProperty != null)
-                    {
-                        var sizeValue = LevelSizeProperty.GetValue(null);
-                        if (sizeValue is byte b)
-                        {
-                            mapSize = b;
-                        }
-                    }
-                    else if (LevelSizeField != null)
-                    {
-                        var sizeValue = LevelSizeField.GetValue(null);
-                        if (sizeValue is byte b)
-                        {
-                            mapSize = b;
-                        }
-                    }
-                }
-                catch
-                {
-                    // Fallback: use default map size (usually 4 for large maps)
-                    mapSize = 4;
+                    RocketLogger.LogWarning("[RadiationStorm] Deadzone node could not be constructed. Deadzone will be skipped.");
+                    return;
                 }
 
-                // Calculate map bounds based on size
-                // Map size: 0=small(512m), 1=medium(1024m), 2=large(2048m), 3=insane(4096m), 4=extreme(8192m)
-                float mapSizeInMeters = 512f * Mathf.Pow(2f, mapSize);
-                
-                // Calculate radius needed to cover entire map (diagonal distance from center to corner)
-                // Using diagonal: sqrt(2) * halfMapSize, plus some buffer
-                float halfMapSize = mapSizeInMeters / 2f;
-                float diagonalDistance = Mathf.Sqrt(2f) * halfMapSize;
-                float radius = Mathf.Max((float)Configuration.Instance.DeadzoneRadius, diagonalDistance + 100f); // Add 100m buffer
-
-                // Create single deadzone node at map center (0, 0, 0) with calculated radius
-                var deadzoneNode = new DeadzoneNode
-                {
-                    point = Vector3.zero, // Center of map
-                    radius = radius,
-                    type = EDeadzoneType.DefaultRadiation
-                };
-
-                // Set damage properties using reflection
-                var nodeType = typeof(DeadzoneNode);
-                var unprotectedDamageProp = nodeType.GetProperty("UnprotectedDamagePerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var protectedDamageProp = nodeType.GetProperty("ProtectedDamagePerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var unprotectedRadiationProp = nodeType.GetProperty("UnprotectedRadiationPerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var maskFilterDamageProp = nodeType.GetProperty("MaskFilterDamagePerSecond", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-                if (unprotectedDamageProp != null && unprotectedDamageProp.CanWrite)
-                {
-                    unprotectedDamageProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneUnprotectedDamagePerSecond);
-                }
-
-                if (protectedDamageProp != null && protectedDamageProp.CanWrite)
-                {
-                    protectedDamageProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneProtectedDamagePerSecond);
-                }
-
-                if (unprotectedRadiationProp != null && unprotectedRadiationProp.CanWrite)
-                {
-                    unprotectedRadiationProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneUnprotectedRadiationPerSecond);
-                }
-
-                if (maskFilterDamageProp != null && maskFilterDamageProp.CanWrite)
-                {
-                    maskFilterDamageProp.SetValue(deadzoneNode, (float)Configuration.Instance.DeadzoneMaskFilterDamagePerSecond);
-                }
-
-                // Register deadzone using reflection
                 if (LevelNodesRegisterDeadzoneMethod != null)
                 {
                     LevelNodesRegisterDeadzoneMethod.Invoke(null, new object[] { deadzoneNode });
                     _createdDeadzoneNode = deadzoneNode;
-                    RocketLogger.Log($"[RadiationStorm] Created single deadzone node covering entire map ({mapSizeInMeters}m x {mapSizeInMeters}m) with radius {radius}m.");
                 }
-                else
+                else if (LevelNodesDeadzoneNodesField != null)
                 {
-                    // Fallback: try to add directly to deadzoneNodes list
-                    if (LevelNodesDeadzoneNodesField != null)
+                    var deadzoneNodes = LevelNodesDeadzoneNodesField.GetValue(null);
+                    if (deadzoneNodes is List<DeadzoneNode> nodes)
                     {
-                        var deadzoneNodes = LevelNodesDeadzoneNodesField.GetValue(null);
-                        if (deadzoneNodes is List<DeadzoneNode> nodes)
-                        {
-                            nodes.Add(deadzoneNode);
-                            _createdDeadzoneNode = deadzoneNode;
-                            RocketLogger.Log($"[RadiationStorm] Created single deadzone node covering entire map ({mapSizeInMeters}m x {mapSizeInMeters}m) with radius {radius}m.");
-                        }
-                        else
-                        {
-                            RocketLogger.LogWarning("[RadiationStorm] Unable to access deadzoneNodes list. Deadzone creation failed.");
-                        }
+                        nodes.Add(deadzoneNode);
+                        _createdDeadzoneNode = deadzoneNode;
                     }
                     else
                     {
-                        RocketLogger.LogWarning("[RadiationStorm] Unable to locate deadzone registration methods. Deadzone creation failed.");
+                        RocketLogger.LogWarning("[RadiationStorm] Unable to access deadzoneNodes list. Deadzone creation failed.");
+                        return;
                     }
                 }
+                else
+                {
+                    RocketLogger.LogWarning("[RadiationStorm] Unable to locate deadzone registration methods. Deadzone creation failed.");
+                    return;
+                }
+
+                RocketLogger.Log($"[RadiationStorm] Created single deadzone node covering entire map ({mapSizeInMeters}m x {mapSizeInMeters}m) with radius {deadzoneNode.radius}m.");
             }
             catch (Exception ex)
             {
                 RocketLogger.LogWarning($"[RadiationStorm] Failed to create deadzone: {ex.Message}");
+            }
+        }
+
+        private byte ResolveMapSize()
+        {
+            try
+            {
+                if (LevelSizeProperty != null)
+                {
+                    var sizeValue = LevelSizeProperty.GetValue(null);
+                    if (sizeValue is byte sizeFromProperty)
+                    {
+                        return sizeFromProperty;
+                    }
+                }
+
+                if (LevelSizeField != null)
+                {
+                    var sizeValue = LevelSizeField.GetValue(null);
+                    if (sizeValue is byte sizeFromField)
+                    {
+                        return sizeFromField;
+                    }
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+
+            return 4; // fallback for large maps
+        }
+
+        private DeadzoneNode BuildDeadzoneNode(Vector3 position, float radius)
+        {
+            try
+            {
+                var deadzoneNode = InstantiateDeadzoneNode();
+                if (deadzoneNode == null)
+                {
+                    return null;
+                }
+
+                if (!TryAssignDeadzoneMember(deadzoneNode, position, "point", "_point", "m_Point"))
+                {
+                    RocketLogger.LogWarning("[RadiationStorm] Unable to assign position to DeadzoneNode via reflection.");
+                    return null;
+                }
+
+                if (!TryAssignDeadzoneMember(deadzoneNode, radius, "radius", "_radius", "m_Radius"))
+                {
+                    try
+                    {
+                        deadzoneNode.radius = radius;
+                    }
+                    catch
+                    {
+                        RocketLogger.LogWarning("[RadiationStorm] Unable to assign radius to DeadzoneNode.");
+                        return null;
+                    }
+                }
+
+                var nodeTypeValue = GetEnumValue("SDG.Unturned.ENodeType", "DEADZONE");
+                if (nodeTypeValue != null)
+                {
+                    TryAssignDeadzoneMember(deadzoneNode, nodeTypeValue, "type", "_type", "nodeType");
+                }
+
+                if (!TryAssignDeadzoneMember(deadzoneNode, EDeadzoneType.DefaultRadiation, "deadzoneType", "_deadzoneType", "m_DeadzoneType"))
+                {
+                    TryAssignDeadzoneMember(deadzoneNode, EDeadzoneType.DefaultRadiation, "deadzone", "_deadzone");
+                }
+
+                TryAssignDeadzoneMember(deadzoneNode, (float)Configuration.Instance.DeadzoneUnprotectedDamagePerSecond, "UnprotectedDamagePerSecond");
+                TryAssignDeadzoneMember(deadzoneNode, (float)Configuration.Instance.DeadzoneProtectedDamagePerSecond, "ProtectedDamagePerSecond");
+                TryAssignDeadzoneMember(deadzoneNode, (float)Configuration.Instance.DeadzoneUnprotectedRadiationPerSecond, "UnprotectedRadiationPerSecond");
+                TryAssignDeadzoneMember(deadzoneNode, (float)Configuration.Instance.DeadzoneMaskFilterDamagePerSecond, "MaskFilterDamagePerSecond");
+
+                return deadzoneNode;
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Failed to configure deadzone node: {ex.Message}");
+                return null;
+            }
+        }
+
+        private DeadzoneNode InstantiateDeadzoneNode()
+        {
+            var type = typeof(DeadzoneNode);
+
+            try
+            {
+                foreach (var ctor in type.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    var parameters = ctor.GetParameters();
+                    var args = new object[parameters.Length];
+
+                    for (var i = 0; i < parameters.Length; i++)
+                    {
+                        var parameterType = parameters[i].ParameterType;
+                        args[i] = parameterType.IsValueType ? Activator.CreateInstance(parameterType) : null;
+                    }
+
+                    try
+                    {
+                        return (DeadzoneNode)ctor.Invoke(args);
+                    }
+                    catch
+                    {
+                        // Try next constructor
+                    }
+                }
+
+                return (DeadzoneNode)FormatterServices.GetUninitializedObject(type);
+            }
+            catch (Exception ex)
+            {
+                RocketLogger.LogWarning($"[RadiationStorm] Unable to instantiate DeadzoneNode: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static bool TryAssignDeadzoneMember(object instance, object value, params string[] memberNames)
+        {
+            foreach (var memberName in memberNames)
+            {
+                if (TryAssignDeadzoneMemberInternal(instance, memberName, value))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryAssignDeadzoneMemberInternal(object instance, string memberName, object value)
+        {
+            var currentType = instance.GetType();
+
+            while (currentType != null)
+            {
+                var property = currentType.GetProperty(memberName, DeadzoneReflectionFlags);
+                if (property != null)
+                {
+                    var setter = property.GetSetMethod(true);
+                    if (setter != null)
+                    {
+                        var convertedValue = ConvertDeadzoneMemberValue(value, property.PropertyType);
+                        setter.Invoke(instance, new[] { convertedValue });
+                        return true;
+                    }
+                }
+
+                var field = currentType.GetField(memberName, DeadzoneReflectionFlags);
+                if (field != null)
+                {
+                    var convertedValue = ConvertDeadzoneMemberValue(value, field.FieldType);
+                    field.SetValue(instance, convertedValue);
+                    return true;
+                }
+
+                currentType = currentType.BaseType;
+            }
+
+            return false;
+        }
+
+        private static object ConvertDeadzoneMemberValue(object value, Type targetType)
+        {
+            if (value == null)
+            {
+                return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+            }
+
+            var valueType = value.GetType();
+            if (targetType.IsAssignableFrom(valueType))
+            {
+                return value;
+            }
+
+            if (targetType.IsEnum)
+            {
+                if (valueType.IsEnum)
+                {
+                    var underlying = Convert.ChangeType(value, Enum.GetUnderlyingType(valueType));
+                    return Enum.ToObject(targetType, underlying);
+                }
+
+                if (value is string enumName)
+                {
+                    return Enum.Parse(targetType, enumName, true);
+                }
+
+                if (value is IConvertible convertible)
+                {
+                    var underlyingType = Enum.GetUnderlyingType(targetType);
+                    var numericValue = Convert.ChangeType(convertible, underlyingType);
+                    return Enum.ToObject(targetType, numericValue);
+                }
+
+                return Enum.Parse(targetType, value.ToString(), true);
+            }
+
+            if (typeof(IConvertible).IsAssignableFrom(targetType) && value is IConvertible convertibleValue)
+            {
+                return Convert.ChangeType(convertibleValue, targetType);
+            }
+
+            return value;
+        }
+
+        private static object GetEnumValue(string typeName, string valueName)
+        {
+            try
+            {
+                var type = Type.GetType($"{typeName}, Assembly-CSharp") ?? Type.GetType(typeName);
+                type ??= typeof(DeadzoneNode).Assembly.GetType(typeName);
+
+                if (type == null || !type.IsEnum)
+                {
+                    return null;
+                }
+
+                return Enum.Parse(type, valueName, true);
+            }
+            catch
+            {
+                return null;
             }
         }
 
