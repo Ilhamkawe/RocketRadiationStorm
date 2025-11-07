@@ -1,13 +1,13 @@
 using System;
 using System.Timers;
 using Rocket.API.Collections;
-using Rocket.Core.Logging;
 using Rocket.Core.Plugins;
 using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
 using UnityEngine;
+using RocketLogger = Rocket.Core.Logging.Logger;
 
 namespace RocketRadiationStorm
 {
@@ -25,14 +25,14 @@ namespace RocketRadiationStorm
 
             InitializeTimer();
 
-            Logger.Log("[RadiationStorm] Plugin loaded.");
+            RocketLogger.Log("[RadiationStorm] Plugin loaded.");
         }
 
         protected override void Unload()
         {
             StopTimer();
             Instance = null;
-            Logger.Log("[RadiationStorm] Plugin unloaded.");
+            RocketLogger.Log("[RadiationStorm] Plugin unloaded.");
         }
 
         public override TranslationList DefaultTranslations => new TranslationList
