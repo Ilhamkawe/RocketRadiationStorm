@@ -1,3 +1,5 @@
+extern alias SteamworksNET;
+
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -8,8 +10,8 @@ using Rocket.Core.Utils;
 using Rocket.Unturned.Chat;
 using Rocket.Unturned.Player;
 using SDG.Unturned;
-using Steamworks;
 using UnityEngine;
+using CSteamID = SteamworksNET::Steamworks.CSteamID;
 using RocketLogger = Rocket.Core.Logging.Logger;
 
 namespace RocketRadiationStorm
