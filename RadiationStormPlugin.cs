@@ -47,6 +47,9 @@ namespace RocketRadiationStorm
 
             InitializeTickTimer();
             InitializeAutoStormScheduler();
+            
+            // Subscribe to player connected event to apply effect to new players
+            Provider.onServerConnected += OnPlayerConnected;
 
             RocketLogger.Log("[RadiationStorm] Plugin loaded.");
         }
@@ -58,6 +61,10 @@ namespace RocketRadiationStorm
             StopStormDurationTimer();
             StopDamageDelayTimer();
             ClearRadiationEffectAll();
+            
+            // Unsubscribe from player connected event
+            Provider.onServerConnected -= OnPlayerConnected;
+            
             Instance = null;
             RocketLogger.Log("[RadiationStorm] Plugin unloaded.");
         }
@@ -110,8 +117,13 @@ namespace RocketRadiationStorm
         {
             // Dengan UseRadiationEffect = true dan Effect 14780,
             // game akan handle damage otomatis.
-            // Method ini hanya untuk apply/maintain effect ke semua player.
+            // Method ini untuk apply/maintain effect ke semua player secara berkala.
             
+            if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
+            {
+                return;
+            }
+
             foreach (var steamPlayer in Provider.clients)
             {
                 var player = UnturnedPlayer.FromSteamPlayer(steamPlayer);
@@ -132,6 +144,7 @@ namespace RocketRadiationStorm
                 }
 
                 // Pastikan effect tetap aktif untuk player ini
+                // Effect di-apply ulang secara berkala untuk memastikan tetap aktif
                 EnsureRadiationEffect(player, steamPlayer);
             }
         }
@@ -427,6 +440,16 @@ namespace RocketRadiationStorm
                     continue;
                 }
 
+                if (!Configuration.Instance.TargetUnturnedAdmins && player.IsAdmin)
+                {
+                    continue;
+                }
+
+                if (IsPlayerProtectedFromRadiation(steamPlayer))
+                {
+                    continue;
+                }
+
                 EnsureRadiationEffect(player, steamPlayer);
             }
         }
@@ -451,11 +474,8 @@ namespace RocketRadiationStorm
 
             var steamId = steamPlayer.playerID.steamID;
 
-            if (_effectRecipients.Contains(steamId))
-            {
-                return;
-            }
-
+            // Always re-apply effect to ensure it stays active
+            // This is important because effects can expire or be cleared
             EffectManager.sendUIEffect(
                 Configuration.Instance.RadiationEffectId,
                 Configuration.Instance.RadiationEffectKey,
@@ -983,6 +1003,50 @@ namespace RocketRadiationStorm
 
             _oxygenReflectionWarningLogged = true;
             RocketLogger.LogWarning($"[RadiationStorm] {message} Oxygen safe zones will be ignored.");
+        }
+
+        private void OnPlayerConnected(CSteamID steamId)
+        {
+            // Apply radiation effect to newly connected players if storm is active
+            if (!_stormActive || !_damageActive)
+            {
+                return;
+            }
+
+            TaskDispatcher.QueueOnMainThread(() =>
+            {
+                try
+                {
+                    var steamPlayer = PlayerTool.getSteamPlayer(steamId);
+                    if (steamPlayer == null)
+                    {
+                        return;
+                    }
+
+                    var player = UnturnedPlayer.FromSteamPlayer(steamPlayer);
+                    if (player == null || player.Dead)
+                    {
+                        return;
+                    }
+
+                    if (!Configuration.Instance.TargetUnturnedAdmins && player.IsAdmin)
+                    {
+                        return;
+                    }
+
+                    if (IsPlayerProtectedFromRadiation(steamPlayer))
+                    {
+                        return;
+                    }
+
+                    // Apply effect to newly connected player
+                    EnsureRadiationEffect(player, steamPlayer);
+                }
+                catch (Exception ex)
+                {
+                    RocketLogger.LogWarning($"[RadiationStorm] Failed to apply effect to newly connected player: {ex.Message}");
+                }
+            });
         }
 
         private void ExecuteWeatherCommand(string command)
