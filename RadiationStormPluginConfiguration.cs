@@ -22,23 +22,27 @@ namespace RocketRadiationStorm
         public bool UseRadiationEffect { get; set; }
         public ushort RadiationEffectId { get; set; }
         public short RadiationEffectKey { get; set; }
+        public bool RespectOxygenSafeZones { get; set; }
+        public double OxygenSafeAlphaThreshold { get; set; }
 
         public void LoadDefaults()
         {
-            TickIntervalSeconds = 2.0;
-            InfectionDamagePerTick = 5;
+            TickIntervalSeconds = 2.0; // Check effect tiap 2 detik
+            InfectionDamagePerTick = 0; // 0 = damage dari effect, bukan manual
             BroadcastMessages = true;
             TargetUnturnedAdmins = false;
-            AutoStormEnabled = false;
-            AutoStormMinIntervalMinutes = 20;
-            AutoStormMaxIntervalMinutes = 30;
-            StormDurationSeconds = 180;
-            UseWeather = false;
-            WeatherGuid = "00000000000000000000000000000000";
-            WeatherDamageDelaySeconds = 5;
-            UseRadiationEffect = false;
-            RadiationEffectId = 0;
+            AutoStormEnabled = true; // Auto storm aktif
+            AutoStormMinIntervalMinutes = 30; // Minimal 30 menit
+            AutoStormMaxIntervalMinutes = 60; // Maksimal 60 menit
+            StormDurationSeconds = 300; // Storm berlangsung 5 menit
+            UseWeather = true; // Aktifkan weather
+            WeatherGuid = "6c850687bdb947a689fa8de8a8d99afb"; // Default fog GUID
+            WeatherDamageDelaySeconds = 5; // Delay 5 detik setelah weather
+            UseRadiationEffect = true; // Aktifkan deadzone effect
+            RadiationEffectId = 14780; // Deadzone effect (tengkorak + damage)
             RadiationEffectKey = 514;
+            RespectOxygenSafeZones = true;
+            OxygenSafeAlphaThreshold = 0.05; // Minimal alpha untuk dianggap aman (5%)
         }
     }
 }

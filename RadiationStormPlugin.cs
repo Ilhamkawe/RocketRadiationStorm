@@ -100,55 +100,32 @@ namespace RocketRadiationStorm
 
         private void ApplyRadiationTick()
         {
-            var playerCount = Provider.clients.Count;
-            RocketLogger.Log($"[RadiationStorm] ApplyRadiationTick called. Players online: {playerCount}");
-
+            // Dengan UseRadiationEffect = true dan Effect 14780,
+            // game akan handle damage otomatis.
+            // Method ini hanya untuk apply/maintain effect ke semua player.
+            
             foreach (var steamPlayer in Provider.clients)
             {
                 var player = UnturnedPlayer.FromSteamPlayer(steamPlayer);
 
                 if (player == null || player.Dead)
                 {
-                    RocketLogger.Log($"[RadiationStorm] Skipping null/dead player");
                     continue;
                 }
 
                 if (!Configuration.Instance.TargetUnturnedAdmins && player.IsAdmin)
                 {
-                    RocketLogger.Log($"[RadiationStorm] Skipping admin: {player.DisplayName}");
                     continue;
                 }
 
+                if (IsPlayerInOxygenSafeZone(steamPlayer))
+                {
+                    ClearRadiationEffectForPlayer(steamPlayer);
+                    continue;
+                }
+
+                // Pastikan effect tetap aktif untuk player ini
                 EnsureRadiationEffect(player, steamPlayer);
-
-                var currentInfection = player.Infection;
-
-                // Infection bar sudah 0, biarkan game handle health damage
-                if (currentInfection == 0)
-                {
-                    RocketLogger.Log($"[RadiationStorm] {player.DisplayName} infection already at 0 (health will drain)");
-                    continue;
-                }
-
-                var damage = Configuration.Instance.InfectionDamagePerTick;
-
-                if (damage <= 0)
-                {
-                    RocketLogger.Log($"[RadiationStorm] Damage is 0 or negative: {damage}");
-                    continue;
-                }
-
-                // KURANGI infection bar (bar hijau turun)
-                var newValue = (byte)Math.Max(0, currentInfection - damage);
-
-                if (newValue == currentInfection)
-                {
-                    RocketLogger.Log($"[RadiationStorm] No change for {player.DisplayName}: {currentInfection}");
-                    continue;
-                }
-
-                player.Infection = newValue;
-                RocketLogger.Log($"[RadiationStorm] {player.DisplayName} infection bar: {currentInfection} -> {newValue}");
             }
         }
 
@@ -454,6 +431,12 @@ namespace RocketRadiationStorm
                 return;
             }
 
+            if (IsPlayerInOxygenSafeZone(steamPlayer))
+            {
+                ClearRadiationEffectForPlayer(steamPlayer);
+                return;
+            }
+
             var steamId = steamPlayer.playerID.steamID;
 
             if (_effectRecipients.Contains(steamId))
@@ -470,6 +453,24 @@ namespace RocketRadiationStorm
             _effectRecipients.Add(steamId);
         }
 
+        private void ClearRadiationEffectForPlayer(SteamPlayer steamPlayer)
+        {
+            var steamId = steamPlayer.playerID.steamID;
+            var removed = _effectRecipients.Remove(steamId);
+
+            if (!removed)
+            {
+                return;
+            }
+
+            if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
+            {
+                return;
+            }
+
+            EffectManager.askEffectClearByID(Configuration.Instance.RadiationEffectId, steamPlayer.transportConnection);
+        }
+
         private void ClearRadiationEffectAll()
         {
             if (!Configuration.Instance.UseRadiationEffect || Configuration.Instance.RadiationEffectId == 0)
@@ -484,6 +485,27 @@ namespace RocketRadiationStorm
             }
 
             _effectRecipients.Clear();
+        }
+
+        private bool IsPlayerInOxygenSafeZone(SteamPlayer steamPlayer)
+        {
+            if (!Configuration.Instance.RespectOxygenSafeZones)
+            {
+                return false;
+            }
+
+            if (steamPlayer?.player == null)
+            {
+                return false;
+            }
+
+            var position = steamPlayer.player.transform.position;
+            if (OxygenVolumeManager.IsPositionInsideBreathableVolume(position, out var alpha))
+            {
+                return alpha >= Math.Max(0f, (float)Configuration.Instance.OxygenSafeAlphaThreshold);
+            }
+
+            return false;
         }
 
         private void ExecuteWeatherCommand(string command)
