@@ -18,11 +18,11 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build plugin
-        run: msbuild RocketRadiationStorm\RocketRadiationStorm.csproj /p:Configuration=Release
+        run: msbuild RocketRadiationStorm.csproj /p:Configuration=Release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: RocketRadiationStorm
-          path: RocketRadiationStorm/bin/Release/**/*.dll
+          path: bin/Release/**/*.dll
 
