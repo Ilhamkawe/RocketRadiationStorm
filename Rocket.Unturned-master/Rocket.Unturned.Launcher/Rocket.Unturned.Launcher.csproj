@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>RocketLauncher</AssemblyName>
+    <TargetFrameworks>netcoreapp2.2; net461</TargetFrameworks>
+    <!-- Set by CI -->
+    <Version>0.0.0.0</Version>
+    <!-- Set by CI -->
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+    <!-- Set by CI -->
+    <FileVersion>0.0.0.0</FileVersion>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+</Project>

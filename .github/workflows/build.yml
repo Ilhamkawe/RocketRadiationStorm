@@ -1,0 +1,29 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build plugin
+        working-directory: RocketRadiationStorm
+        run: msbuild RocketRadiationStorm.csproj /p:Configuration=Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RocketRadiationStorm
+          path: RocketRadiationStorm/bin/Release/**/*.dll
+
